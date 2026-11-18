@@ -120,26 +120,22 @@ class PygameFrontend:
 
         screen.blit(ray_surf, (0, 0))
 
-    def draw_info(self, screen: pygame.Surface, info: dict, position=(10, 10), font_size=15, line_height=25, color=(255, 255, 255)):
-        """
-        Draws a dictionary of info on the screen.
-
-        Parameters:
-        - screen: pygame.Surface
-        - info: dict, e.g., {"time": 10, "distance_to_path": 5.2}
-        - position: (x, y) top-left corner for text
-        - font_size: int, font size
-        - line_height: vertical spacing between lines
-        - color: RGB tuple
-        """
+    def draw_info(self, screen: pygame.Surface, info: dict, position=(10, 10), font_size=15, line_height=22, color=(255, 255, 255)):
         font = pygame.font.SysFont("Arial", font_size)
         x, y = position
+
+        padding = 6
+        box_width = 240
+        box_height = len(info) * line_height + padding
+        bg_surf = pygame.Surface((box_width, box_height), pygame.SRCALPHA)
+        bg_surf.fill((0, 0, 0, 160))
+        screen.blit(bg_surf, (x - padding, y - padding))
 
         for key, value in info.items():
             if key == "direction_of_path":
                 value = f"(x={value[0]:.2f}, y={value[1]:.2f})"
-            if key == "distance_to_path":
-                value = f"{value:.4f}"
+            elif isinstance(value, (float, jnp.floating)) or (hasattr(value, "ndim") and value.ndim == 0 and jnp.issubdtype(value.dtype, jnp.floating)):
+                value = f"{float(value):.2f}"
             text_surf = font.render(f"{key}: {value}", True, color)
             screen.blit(text_surf, (x, y))
             y += line_height
