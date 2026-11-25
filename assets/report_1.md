@@ -1,7 +1,7 @@
 # Отчёт по Assignment 1 (Environment)
 </br>
 
-### Студент: Айнур Суранчина
+### Студент: Ainur Suranchina
 ### Дисциплина: Introduction to Adaptive and Efficient ML
 ### ветка репозитория Submission
 </br>
