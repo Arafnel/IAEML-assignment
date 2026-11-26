@@ -97,7 +97,7 @@ def train():
     # гиперпараметры обучения
     NUM_ENVS = 64  # количество параллельных сред (vmap)
     NUM_STEPS = 128  # длина роллаута на одну среду перед обновлением
-    TOTAL_UPDATES = 250  # количество циклов обновления PPO
+    TOTAL_UPDATES = 400  # количество циклов обновления PPO
     PPO_EPOCHS = 4  # количество проходов по собранным данным
     MINIBATCH_SIZE = 256  # размер мини-батча
     LR = 3e-4  # learning rate
@@ -110,23 +110,70 @@ def train():
     key, env_key, model_key = jax.random.split(key, 3)
 
     # инициализация среды
-    env_params, init_state = RobotaxiEnv.init_params(
-        key=env_key,
-        map_id=1,
-        max_steps=600,
-        discretization_scale=1,
-        path_length=100,
-        fps=60,
-        perception_radius=5.0,
-        num_ray_sensors=32,)
-    env = AutoResetWrapper(RobotaxiEnv, env_params, init_state)
+    raw_states = []
+    for m_id in [0, 1, 2]:
+        p, st = RobotaxiEnv.init_params(
+            key=env_key,
+            map_id=m_id,
+            max_steps=600,
+            discretization_scale=1,
+            path_length=100,
+            fps=60,
+            perception_radius=5.0,
+            num_ray_sensors=32,
+        )
+        raw_states.append(st)
+    env_params = p
 
-    # векторизация reset и step по батчу сред
-    batch_reset = jax.vmap(env.reset, in_axes=(0, None, None))
-    batch_step = jax.vmap(env.step, in_axes=(0, 0, 0, None))
+    max_static = max(s.static_obstacles.shape[0] for s in raw_states)
+    max_kin = max(s.kinematic_obstacles.shape[0] for s in raw_states)
+
+    padded_states = []
+    for st in raw_states:
+        pad_s = max_static - st.static_obstacles.shape[0]
+        if pad_s > 0:
+            st = eqx.tree_at(
+                lambda t: t.static_obstacles,
+                st,
+                jnp.pad(st.static_obstacles, ((0, pad_s), (0, 0)), constant_values=-100.0),
+            )
+        pad_k = max_kin - st.kinematic_obstacles.shape[0]
+        if pad_k > 0:
+            st = eqx.tree_at(
+                lambda t: t.kinematic_obstacles,
+                st,
+                jnp.pad(st.kinematic_obstacles, ((0, pad_k), (0, 0)), constant_values=-100.0),
+            )
+            st = eqx.tree_at(
+                lambda t: t.kinematic_obst_velocities,
+                st,
+                jnp.pad(st.kinematic_obst_velocities, ((0, pad_k), (0, 0)), constant_values=0.0),
+            )
+        padded_states.append(st)
+
+    all_init_states = jax.tree.map(lambda *xs: jnp.stack(xs), *padded_states)
+
+    map_assignments = jnp.arange(NUM_ENVS) % 3
+    batch_init_states = jax.tree.map(lambda x: x[map_assignments], all_init_states)
+
+    def single_reset(k, init_st):
+        return RobotaxiEnv.reset(k, env_params, init_st)
+
+    def single_step(k, st, act, init_st):
+        obs, next_st, reward, done, info = RobotaxiEnv.step(k, st, act, env_params)
+        obs, next_st = jax.lax.cond(
+            done,
+            lambda _: single_reset(k, init_st),
+            lambda _: (obs, next_st),
+            None,
+        )
+        return obs, next_st, reward, done, info
+
+    batch_reset = jax.vmap(single_reset, in_axes=(0, 0))
+    batch_step = jax.vmap(single_step, in_axes=(0, 0, 0, 0))
 
     env_keys = jax.random.split(env_key, NUM_ENVS)
-    obs_batch, env_states = batch_reset(env_keys, env_params, init_state)
+    obs_batch, env_states = batch_reset(env_keys, batch_init_states)
     obs_vec_batch = jax.vmap(lambda o: o.as_vector())(obs_batch)
     obs_dim = obs_vec_batch.shape[-1]
     action_dim = 2
@@ -183,7 +230,7 @@ def train():
 
             step_keys = jax.random.split(env_rng, NUM_ENVS)
             next_obs_struct, next_states, rewards, dones, _ = batch_step(
-                step_keys, states, actions, env_params
+                step_keys, states, actions, batch_init_states
             )
             next_obs_vec = jax.vmap(lambda o: o.as_vector())(next_obs_struct)
 

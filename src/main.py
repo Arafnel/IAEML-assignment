@@ -10,7 +10,7 @@ from utils.autoreset import AutoResetWrapper
 key = jax.random.PRNGKey(0)
 env_params, init_state = RobotaxiEnv.init_params(
     key=key,
-    map_id=1,
+    map_id=2,
     max_steps=1000,
     discretization_scale=1,
     path_length=100,
